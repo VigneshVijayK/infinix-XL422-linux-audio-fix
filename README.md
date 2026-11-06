@@ -1,274 +1,146 @@
-# Infinix IN X3 Slim Linux Speaker Fix
+# Infinix IN X3 XL422 - Linux Audio Fix + Volume Sync
 
-A fix for speaker issues on Infinix IN X3 Slim laptops running Linux. This solution replaces specific audio configuration files to enable speaker functionality.
+Complete fix for no-speaker-output and broken volume bar sync on Infinix INBook X3 Slim (XL422) laptops running Linux.
 
-## 📋 Table of Contents
+## The Problem
 
-- [Problem](#problem)
-- [Solution](#solution)
-- [Prerequisites](#prerequisites)
-- [How to Run](#how-to-run)
-- [Installation](#installation)
-- [Verification](#verification)
-- [Restoring Original Files](#restoring-original-files)
-- [Troubleshooting](#troubleshooting)
-- [System Information](#system-information)
-- [File Structure](#file-structure)
-- [Contributing](#contributing)
-- [License](#license)
-- [Credits](#credits)
+This laptop has a **Realtek ALC269VB** audio codec that Linux doesn't fully initialize correctly. Two issues occur:
 
-## Problem
+### 1. No Speaker Output
 
-After switching to Linux on the Infinix IN X3 Slim laptop, the speakers were not working. No existing solutions were found online, so this fix was developed to resolve the issue.
+The kernel's `snd-hda-intel` driver misidentifies the internal speaker pin (0x14), leaving the audio routing disconnected. The speaker DAC never gets connected to the physical speaker output.
 
-## Solution
+### 2. Broken Volume Bar Sync (After Fix)
 
-This fix replaces specific audio configuration files (`hda-jack-retask.conf` and `hda-jack-retask.fw`) to enable speaker functionality on Infinix IN X3 Slim laptops running Linux.
+Applying the HDA pin config fix causes the driver to create a virtual "Master" ALSA control that initializes at **56/87 (-23.25dB)**. Your desktop volume slider only controls PipeWire's software volume, while this hidden hardware Master sits at a fixed low value, creating **double attenuation**. Result: slider at 40% sounds like 10-20%.
 
-## Prerequisites
+## The Fix
 
-- **Laptop Model**: Infinix IN X3 Slim
-- **Linux Distribution**: Ubuntu 24.04.3 LTS (tested)
-- **Kernel Version**: Linux 6.14.0-37-generic (tested)
-- **Root/sudo access** (required to replace system files)
-- **Backup of your system** (recommended, though the script creates automatic backups)
+Two changes are needed:
 
-## How to Run
+| Step | What | How |
+|------|------|-----|
+| **1** | Fix speaker routing | HDA pin config patch (`hda-jack-retask.fw`) overrides the codec's pin defaults to correctly identify the speaker output |
+| **2** | Fix volume sync | Systemd service forces Master to 87/87 (0dB) on every boot, removing the hidden attenuation layer |
 
-### Method 1: Using bash (Recommended)
+### How the Pin Config Works
 
-1. **Open a terminal** in the directory containing the script
+The file `sound-fix/lib/firmware/hda-jack-retask.fw` contains:
 
-2. **Make the script executable** (optional but recommended):
-   ```bash
-   chmod +x install-fix.sh
-   ```
+```ini
+[codec]
+0x10ec0269 0x27820250 0
 
-3. **Run the script with sudo**:
-   ```bash
-   sudo bash install-fix.sh
-   ```
-   
-   Or if you made it executable:
-   ```bash
-   sudo ./install-fix.sh
-   ```
-
-### Method 2: Direct Execution
-
-If the script is already executable, you can run it directly:
-```bash
-sudo ./install-fix.sh
+[pincfg]
+0x14 0x90170110
 ```
 
-### What to Expect
+This tells the kernel: "for Realtek ALC269VB (vendor 0x10EC, subsystem 0x2782), override pin 0x14 as a fixed internal speaker with analog connection." Without this, the driver leaves the pin unconfigured and no audio reaches the speakers.
 
-When you run the script, you'll see an interactive menu:
+### How the Volume Sync Works
 
-```
-==========================================
-Infinix IN X3 Slim Speaker Fix
-==========================================
-
-1. Install Fix (with backup)
-2. Restore from Backup
-3. Exit
-
-Select an option (1-3):
-```
-
-**To install the fix:**
-1. Type `1` and press Enter
-2. The script will create a backup and replace system files
-3. You'll be asked if you want to restart the system (type `y` for yes or `n` for no)
-
-**To restore from backup:**
-1. Type `2` and press Enter
-2. You'll see a list of available backups with timestamps
-3. Select the backup number you want to restore
-4. You'll be asked if you want to restart the system
-
-**To exit:**
-- Type `3` and press Enter
-
-### Important Notes
-
-- **You must run the script with `sudo`** - it needs root privileges to replace system files
-- **The `sound-fix` folder must be in the same directory** as the script
-- **All original files are automatically backed up** before replacement
-- **You may need to restart your system** for changes to take effect
-
-### Example Session
+The pin config override triggers the HDA generic parser to create a "Master" virtual control alongside the individual "Speaker Playback Volume" control. This Master initializes at 56/87 in hardware. The systemd service:
 
 ```bash
-$ sudo bash install-fix.sh
-
-==========================================
-Infinix IN X3 Slim Speaker Fix
-==========================================
-
-1. Install Fix (with backup)
-2. Restore from Backup
-3. Exit
-
-Select an option (1-3): 1
-
-==========================================
-Installing Speaker Fix
-==========================================
-
-Creating backup: 20241215_143022
-
-  Backed up: /etc/modprobe.d/hda-jack-retask.conf
-  Replaced: /etc/modprobe.d/hda-jack-retask.conf
-  Backed up: /lib/firmware/hda-jack-retask.fw
-  Replaced: /lib/firmware/hda-jack-retask.fw
-
-==========================================
-Installation complete!
-==========================================
-Files replaced: 2
-Backup saved to: /path/to/backups/20241215_143022
-
-Do you want to restart the system now? (y/n): y
-Restarting system in 5 seconds... (Press Ctrl+C to cancel)
+amixer -c 0 sset Master 87
 ```
+
+runs 3 seconds after boot to pin it to maximum (0dB), making it transparent. Only PipeWire's software volume then controls loudness.
 
 ## Installation
 
-### Quick Start
+### One-liner (curl)
 
-1. **Clone or download this repository**
+```bash
+curl -sSL https://raw.githubusercontent.com/VigneshVijayK/infinix-XL422-linux-audio-fix/main/sound-fix/lib/firmware/hda-jack-retask.fw -o /tmp/hda-jack-retask.fw
+curl -sSL https://raw.githubusercontent.com/VigneshVijayK/infinix-XL422-linux-audio-fix/main/sound-fix/etc/modprobe.d/hda-jack-retask.conf -o /tmp/hda-jack-retask.conf
+sudo cp /tmp/hda-jack-retask.fw /lib/firmware/
+sudo cp /tmp/hda-jack-retask.conf /etc/modprobe.d/
+sudo bash -c 'cat > /etc/systemd/system/alsa-master-volume.service << EOF
+[Unit]
+Description=Set ALSA Master volume to 100% (fix volume sync)
+After=alsa-restore.service sound.target
+Requires=alsa-restore.service
 
-2. **Ensure the `sound-fix` folder exists** with your fix files, maintaining the same directory structure as the system:
-   ```
-   sound-fix/
-   ├── etc/
-   │   └── modprobe.d/
-   │       └── hda-jack-retask.conf
-   └── lib/
-       └── firmware/
-           └── hda-jack-retask.fw
-   ```
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 3
+ExecStart=/usr/bin/amixer -c 0 sset Master 87
+RemainAfterExit=true
 
-3. **Run the installation script**:
-   ```bash
-   sudo bash install-fix.sh
-   ```
+[Install]
+WantedBy=multi-user.target
+EOF'
+sudo systemctl daemon-reload
+sudo systemctl enable alsa-master-volume.service
+echo "Done. Reboot required."
+```
 
-4. **Select option 1** from the menu to install the fix
+### Using the script (recommended)
 
-### Installation Process
+```bash
+git clone https://github.com/VigneshVijayK/infinix-XL422-linux-audio-fix.git
+cd infinix-XL422-linux-audio-fix
+sudo bash install-fix.sh
+```
 
-The script provides an interactive menu with the following options:
-
-#### Option 1: Install Fix (with backup)
-- Automatically creates a timestamped backup of all original system files
-- Replaces system files with fixed versions from the `sound-fix` folder
-- Preserves original file permissions and ownership
-- Prompts to restart the system after installation
-
-#### Option 2: Restore from Backup
-- Lists all available backups with timestamps
-- Allows you to select and restore from any previous backup
-- Restores files with original permissions
-- Prompts to restart the system after restoration
-
-#### Option 3: Exit
-- Exits the script
+The script shows an interactive menu: choose **1** to install, **2** to revert.
 
 ### What the Script Does
 
-- **Automatic Backups**: All original files are backed up to `backups/TIMESTAMP/` before replacement
-- **Permission Preservation**: Original file permissions and ownership are maintained
-- **Safe Restoration**: Easy restore process if anything goes wrong
-- **System Restart**: Optional system restart after installation/restoration
+1. Backs up original `/etc/modprobe.d/hda-jack-retask.conf` and `/lib/firmware/hda-jack-retask.fw` (if they exist)
+2. Copies the fixed versions from `sound-fix/` to the system
+3. Creates and enables `alsa-master-volume.service`
+4. Offers to set Master=87 immediately for testing
+5. Prompts for reboot
 
-## Verification
+### Options
 
-After applying the fix, verify that speakers are working:
+- **Install** (option 1): Applies the speaker fix + volume sync fix
+- **Revert** (option 2): Removes all installed files, disables the service, restores originals from backup
+
+### Revert
 
 ```bash
-# Test audio output
-speaker-test -t wav -c 2
+sudo bash install-fix.sh
+# Select option 2
 ```
 
-Or play a test audio file:
-```bash
-aplay /usr/share/sounds/alsa/Front_Left.wav
+## Project Structure
+
 ```
+infinix-XL422-linux-audio-fix/
+├── install-fix.sh                   # Main installer script
+├── README.md                        # This file
+├── LICENSE                          # MIT License
+└── sound-fix/
+    ├── etc/
+    │   └── modprobe.d/
+    │       └── hda-jack-retask.conf # Kernel module options
+    └── lib/
+        └── firmware/
+            └── hda-jack-retask.fw   # Pin config override
 
-You can also test with any media player or system sounds.
-
-## Restoring Original Files
-
-If you need to restore the original system files:
-
-1. Run the script: `sudo bash install-fix.sh`
-2. Select option **2** (Restore from Backup)
-3. Choose the backup you want to restore from
-4. Confirm the restoration
-5. Restart your system when prompted
-
-All backups are stored in the `backups/` folder with timestamps for easy identification.
-
-## Troubleshooting
-
-### Issue: Script says "sound-fix folder not found"
-- Make sure the folder is named exactly `sound-fix` (with a hyphen, not a space)
-- Ensure the folder is in the same directory as the installation script
-
-### Issue: Fix doesn't work after installation
-- Try restarting your system (the script should prompt you, but you can do it manually)
-- Check if audio services are running: `systemctl --user status pulseaudio` or `systemctl --user status pipewire`
-- Verify files were replaced: Check if the files in `sound-fix` match what's in the system
-
-### Issue: Audio still not working
-- Restore from backup and try again
-- Check your audio settings in system preferences
-- Verify your audio device is selected correctly
-- Check system logs: `dmesg | grep -i audio` or `journalctl -u pulseaudio`
-
-### Issue: Need to restore but forgot which backup
-- All backups are in the `backups/` folder
-- Each backup folder contains a `backup_info.txt` file with timestamp and file count
-- The restore menu shows backup dates to help you choose
-
-### Issue: Permission denied errors
-- Make sure you're running the script with `sudo`
-- Check that you have root/sudo privileges: `sudo -v`
-
-## System Information
-
-- **Supported Laptop Model**: Infinix IN X3 Slim
-- **Tested Linux Distributions**: Ubuntu 24.04.3 LTS
-- **Tested Kernel Version**: Linux 6.14.0-37-generic
-- **Audio System**: ALSA with HDA Jack Retask firmware
-
-## File Structure
-
-The fix includes:
-- `/etc/modprobe.d/hda-jack-retask.conf` - Audio module configuration
-- `/lib/firmware/hda-jack-retask.fw` - Audio firmware file
-
-## Contributing
-
-If you have improvements or encounter issues, please:
-1. Open an issue describing the problem or enhancement
-2. Submit a pull request with your fix
-3. Test on your Infinix IN X3 Slim before submitting
-
-## License
-
-MIT License - See [LICENSE](LICENSE) file for details
+backups/                             # Created automatically by the script (not tracked)
+```
 
 ## Credits
 
-Developed by [Vignesh Vijay K](https://github.com/VigneshVijayK) after encountering and solving the speaker issue on Infinix IN X3 Slim laptops. This fix replaces specific audio configuration files to enable speaker functionality.
+- **Vignesh Vijay K** -- Original HDA pin config fix
+  - GitHub: [@VigneshVijayK](https://github.com/VigneshVijayK)
+  - Repository: https://github.com/VigneshVijayK/infinix-XL422-linux-audio-fix
+- **opencode** -- Volume sync fix (Master=100% on boot), enhanced installer
 
-**GitHub**: [@VigneshVijayK](https://github.com/VigneshVijayK)
+## Tested On
 
-## Disclaimer
+| Component | Version |
+|-----------|---------|
+| Laptop | Infinix INBook X3 Slim (XL422) |
+| Audio Codec | Realtek ALC269VB |
+| Kernel | Linux 6.14.0-37-generic |
+| Distro | Ubuntu 24.04.3 LTS |
+| Audio Server | PipeWire 1.4.2 + WirePlumber |
 
-This fix is provided as-is. Use at your own risk. The script creates automatic backups, but it's always recommended to have a full system backup before making system-level changes. The authors are not responsible for any damage to your system.
+## License
+
+MIT
